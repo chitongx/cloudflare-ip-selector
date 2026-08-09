@@ -32,6 +32,14 @@ LABEL="${3:-电信优选}"
 PORT=443
 OUT_DIR="${HOME}/Desktop/Cloudflare优选IP"
 
+# ===== ping0.cc 纯净度检测（可选）=====
+# 在 ping0.cc 网站购买/获取 API Key 后填这里（或 export PING0_API_KEY=xxx）
+# 有 key: 每个候选 IP 会检测 风控值/原生IP/机房IP，风控值 > RISK_MAX 的自动过滤
+# 无 key: 跳过检测，输出保持原样
+PING0_API_KEY="${PING0_API_KEY:-}"
+RISK_MAX=60    # 风控值上限(%)，超过的 IP 视为不纯净自动过滤；设为 100 则不过滤
+# ================================
+
 mkdir -p "$OUT_DIR"
 
 echo "==> [1/4] Cloudflare 地区延迟测速中（地区: ${COLOS}，每地区 Top ${TOP_N}）..."
@@ -41,7 +49,9 @@ if ! "$CFST_BIN" -httping -dd -url "$URL" -cfcolo "$COLOS" -tl 300 -tlr 0.2 -n 1
 fi
 
 echo "==> [2/4] 解析结果并为 Top IP 补测下载速度..."
-COLOS="$COLOS" TOP_N="$TOP_N" LABEL="$LABEL" PORT="$PORT" OUT_DIR="$OUT_DIR" env -u PYTHONPATH python3 << 'PYEOF'
+COLOS="$COLOS" TOP_N="$TOP_N" LABEL="$LABEL" PORT="$PORT" OUT_DIR="$OUT_DIR" \
+PING0_API_KEY="$PING0_API_KEY" RISK_MAX="$RISK_MAX" \
+env -u PYTHONPATH python3 << 'PYEOF'
 import csv, os, collections, datetime, subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -50,6 +60,8 @@ top_n = int(os.environ["TOP_N"])
 label = os.environ["LABEL"]
 port = os.environ["PORT"]
 out_dir = os.environ["OUT_DIR"]
+ping0_key = os.environ.get("PING0_API_KEY", "")
+risk_max = int(os.environ.get("RISK_MAX", "60"))
 DL_URL = "https://speed.cloudflare.com/__down?bytes=2000000"
 
 REGION_NAMES = {
@@ -80,36 +92,78 @@ def dl_mbps(ip):
     except Exception:
         return 0.0
 
-# 每个地区取 TopN，并并发补测下载速度
-picks = {}   # colo -> [(lat, ip, mbps), ...]
+def ping0_check(ip):
+    """调 ping0.cc 付费接口查纯净度，返回 (风控值%, 原生IP, 机房IP) 或 None（失败/无key）"""
+    if not ping0_key:
+        return None
+    try:
+        url = f"https://ping0.cc/apiloc/apikey({ping0_key})/ip({ip})"
+        r = subprocess.run(["curl", "-s", "--max-time", "12", url],
+                           capture_output=True, text=True, timeout=15)
+        import json as _json
+        d = _json.loads(r.stdout or "{}")
+        if not d or "ip" not in d or "error" in d:
+            return None
+        risk = d.get("iprisk")
+        risk = int(risk) if isinstance(risk, (int, float)) else None
+        return {
+            "risk": risk,                       # 风控值 %
+            "native": bool(d.get("isnative")),  # 原生 IP?
+            "idc": bool(d.get("isidc")),        # 机房 IP?
+            "asn_type": str(d.get("asntype") or ""),
+        }
+    except Exception:
+        return None
+
+def fmt_purity(p):
+    """格式化纯净度标注: 风控26% 原生IP / 风控26% 机房IP"""
+    if not p or p["risk"] is None:
+        return ""
+    tag = "原生IP" if p["native"] else ("机房IP" if p["idc"] else "广播IP")
+    return f" 风控{p['risk']}% {tag}"
+
+# 每个地区取 TopN，并并发补测下载速度 + 纯净度
+picks = {}   # colo -> [(lat, ip, mbps, purity), ...]
 jobs = []
 for colo in requested:
     if colo in groups:
         top = sorted(groups[colo], key=lambda x: x[0])[:top_n]
-        picks[colo] = [(lat, r["IP 地址"].strip(), 0.0) for lat, r in top]
-        for lat, ip, _ in picks[colo]:
+        picks[colo] = [(lat, r["IP 地址"].strip(), 0.0, None) for lat, r in top]
+        for lat, ip, _, _ in picks[colo]:
             jobs.append((colo, ip))
 
 with ThreadPoolExecutor(max_workers=10) as ex:
     speeds = {ip: m for ip, m in zip([j[1] for j in jobs], ex.map(dl_mbps, [j[1] for j in jobs]))}
+    purities = {ip: p for ip, p in zip([j[1] for j in jobs], ex.map(ping0_check, [j[1] for j in jobs]))}
 for colo in picks:
-    picks[colo] = [(lat, ip, speeds[ip]) for lat, ip, _ in picks[colo]]
+    picks[colo] = [(lat, ip, speeds[ip], purities[ip]) for lat, ip, _, _ in picks[colo]]
 
 date_str = datetime.date.today().strftime("%Y-%m-%d")
 lines = [f"Cloudflare 优选 IP（{date_str}）", "=" * 60]
+ping0_enabled = bool(ping0_key)
 
 for colo in requested:
     name = REGION_NAMES.get(colo, colo)
     if colo not in picks:
         lines.append(f"# {colo}（{name}）: 本轮未测到可用 IP")
         continue
+    # 按风控值过滤（仅当纯净度检测启用且拿到了风控值）
+    kept, filtered = [], []
+    for lat, ip, mbps, p in picks[colo]:
+        if ping0_enabled and p and p["risk"] is not None and p["risk"] > risk_max:
+            filtered.append((lat, ip, mbps, p))
+        else:
+            kept.append((lat, ip, mbps, p))
     lines.append(f"# {colo}（{name}）:")
     with open(os.path.join(out_dir, f"{colo}-{name}.txt"), "w", encoding="utf-8") as f:
-        f.write(f"# {colo}（{name}）Cloudflare 优选 IP Top{len(picks[colo])}（{date_str}）\n")
-        for lat, ip, mbps in picks[colo]:
-            line = f"{ip}:{port}#{colo} {label}[{lat:.0f}ms {mbps:.2f}Mbps]"
+        f.write(f"# {colo}（{name}）Cloudflare 优选 IP Top{len(kept)}（{date_str}）\n")
+        for lat, ip, mbps, p in kept:
+            line = f"{ip}:{port}#{colo} {label}[{lat:.0f}ms {mbps:.2f}Mbps]{fmt_purity(p)}"
             lines.append(line)
             f.write(line + "\n")
+    if filtered:
+        lines.append(f"  （风控>{risk_max}% 已过滤 {len(filtered)} 个: "
+                     + ", ".join(f"{ip}[风控{p['risk']}%]" for _, ip, _, p in filtered) + "）")
 
 with open(os.path.join(out_dir, "最优IP-汇总.txt"), "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")
@@ -121,6 +175,8 @@ with open(os.path.join(out_dir, "全部结果.csv"), "w", encoding="utf-8-sig", 
         w.writerow([r["IP 地址"], r["已发送"], r["已接收"], r["丢包率"], r["平均延迟"], r["下载速度(MB/s)"], r["地区码"]])
 
 print("\n".join(lines))
-print(f"\n✅ 已更新: {out_dir}（备注标签: {label}，可改脚本第 3 个参数）")
+status = f"（ping0 纯净度检测: {'已启用，风控>'+str(risk_max)+'% 自动过滤' if ping0_enabled else '未启用，配置 PING0_API_KEY 后开启'}）"
+print(f"\n✅ 已更新: {out_dir} {status}")
+print("   备注标签: " + label + "（可改脚本第 3 个参数）")
 PYEOF
 echo "==> [3/4] 完成"

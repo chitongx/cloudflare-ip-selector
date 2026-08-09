@@ -73,6 +73,32 @@ cd cloudflare-ip-selector
 | `SIN-新加坡.txt` 等 | 每个地区独立文件 |
 | `全部结果.csv` | 本次全量测速明细（含地区码） |
 
+### 🛡️ IP 纯净度检测（可选，基于 ping0.cc）
+
+脚本支持对每个候选 IP 调用 [ping0.cc](https://ping0.cc) 官方接口检测纯净度（风控值 / 原生 IP / 机房 IP），风控值过高的 IP 自动过滤。
+
+**启用方式**：在 [ping0.cc](https://ping0.cc) 获取 API Key 后填入脚本顶部（或 `export PING0_API_KEY=xxx`）：
+
+```bash
+# 脚本配置区（cfst-region.sh 顶部）
+PING0_API_KEY=""     # 填入你的 key
+RISK_MAX=60          # 风控值上限(%)，超过自动过滤；设 100 则不过滤
+
+# 或运行时传入
+PING0_API_KEY=xxxx ./cfst-region.sh
+```
+
+启用后输出示例（行尾追加纯净度标注）：
+
+```
+# SIN（新加坡）:
+104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控26% 原生IP
+162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控48% 机房IP
+  （风控>60% 已过滤 1 个: 104.18.40.98[风控75%]）
+```
+
+> 未配置 Key 时跳过检测，输出保持原样。免费接口 `ping0.cc/geo` 仅返回位置/ASN/组织，纯净度字段需付费 API Key。
+
 ### `cfst-hosts.sh` — 一键更新 hosts 加速 GitHub
 
 ```bash
