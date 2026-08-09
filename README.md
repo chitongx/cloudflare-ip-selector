@@ -75,19 +75,26 @@ cd cloudflare-ip-selector
 
 ### 🛡️ IP 纯净度检测（免费，零成本）
 
-脚本对每个候选 IP 自动检测纯净度并标注：**机房/非机房**（proxycheck.io + ipdata）+ **原生/广播 IP**（ipinfo.io anycast）+ **风控值**（ipdata 综合威胁评分，最接近 ping0 语义；AbuseIPDB 举报分作为补充）。
+脚本对每个候选 IP 自动检测纯净度并标注：**风控值**（本地合成评分）+ **机房/非机房** + **原生/广播 IP** + 威胁标记/黑名单。
+
+**风控值为本地合成评分**（透明公式，模拟综合风控分 0-100，风格参考 ping0 的 20-40 区间）：
+
+```
+风控 = 机房基础分(+25) + 广播基础分(+10) + 威胁标记加权(Tor+40/攻击者+30/滥用+20/代理+10)
+      + 黑名单每个+5(上限15) + AbuseIPDB举报分×0.5    （上限 100）
+```
 
 **启用方式**：免费注册两个 key（各 1 分钟，本项目每天仅查 40 个 IP，远低于免费额度）：
 
 | Key | 注册地址 | 提供数据 |
 |---|---|---|
-| `IPDATA_KEY` | [ipdata.co/signup](https://ipdata.co/signup)（1500次/天） | **风控值**（threat_score 0-100 综合威胁评分）+ 机房判断 |
-| `ABUSEIPDB_KEY` | [abuseipdb.com/register](https://www.abuseipdb.com/register)（1000次/天） | 举报分（AbuseIPDB 有举报记录时的补充信号） |
+| `IPDATA_KEY` | [ipdata.co/signup](https://ipdata.co/signup)（1500次/天） | 威胁标记（攻击者/滥用/代理/Tor）+ 黑名单 + 机房判断 |
+| `ABUSEIPDB_KEY` | [abuseipdb.com/register](https://www.abuseipdb.com/register)（1000次/天） | 举报分（真实滥用举报信号） |
 
 ```bash
 # 脚本配置区（cfst-region.sh 顶部）或环境变量
-IPDATA_KEY=""        # 填入 ipdata key，才有综合风控值
-ABUSEIPDB_KEY=""     # 填入 AbuseIPDB key（可选，补充举报分）
+IPDATA_KEY=""        # 填入 ipdata key
+ABUSEIPDB_KEY=""     # 填入 AbuseIPDB key
 RISK_MAX=60          # 风控值上限(%)，超过自动过滤；设 100 则不过滤
 
 # 或运行时传入
@@ -98,12 +105,13 @@ IPDATA_KEY=xxxx ABUSEIPDB_KEY=xxxx ./cfst-region.sh
 
 ```
 # SIN（新加坡）:
-104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控26% 机房IP 广播IP
-162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控38% 机房IP 广播IP
+104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控35% 机房IP 广播IP
+162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控48% 机房IP 广播IP 威胁:代理
   （风控>60% 已过滤 1 个: 104.18.40.98[风控75%]）
 ```
 
-> 未配置 key 时仍标注 机房/广播（proxycheck + ipinfo 免费接口，零注册）。Cloudflare anycast IP 均为机房/广播属性，纯净度主要看风控值。
+> 未配置 key 时仍标注 机房/广播（proxycheck + ipinfo 免费接口，零注册）。Cloudflare anycast IP 均为机房/广播属性，风控分主要来自基础分+黑名单。
+> 说明：免费生态无「综合风控评分」官方值（ipdata threat_score 为付费字段，ping0/scamalytics 网页被反爬），本地合成评分为透明可解释的近似。
 
 ### `cfst-hosts.sh` — 一键更新 hosts 加速 GitHub
 
