@@ -73,31 +73,32 @@ cd cloudflare-ip-selector
 | `SIN-新加坡.txt` 等 | 每个地区独立文件 |
 | `全部结果.csv` | 本次全量测速明细（含地区码） |
 
-### 🛡️ IP 纯净度检测（可选，基于 ping0.cc）
+### 🛡️ IP 纯净度检测（免费，零成本）
 
-脚本支持对每个候选 IP 调用 [ping0.cc](https://ping0.cc) 官方接口检测纯净度（风控值 / 原生 IP / 机房 IP），风控值过高的 IP 自动过滤。
+脚本对每个候选 IP 自动检测纯净度并标注：**机房/非机房**（proxycheck.io）+ **原生/广播 IP**（ipinfo.io anycast），可选启用**风控值评分**（AbuseIPDB）。
 
-**启用方式**：在 [ping0.cc](https://ping0.cc) 获取 API Key 后填入脚本顶部（或 `export PING0_API_KEY=xxx`）：
+**启用风控值（可选）**：去 [AbuseIPDB](https://www.abuseipdb.com/register) 免费注册 API Key（每天 1000 次查询，本项目每天仅查 40 个 IP），填入脚本顶部或环境变量：
 
 ```bash
 # 脚本配置区（cfst-region.sh 顶部）
-PING0_API_KEY=""     # 填入你的 key
+ABUSEIPDB_KEY=""     # 填入免费注册的 key，才有风控值
 RISK_MAX=60          # 风控值上限(%)，超过自动过滤；设 100 则不过滤
 
 # 或运行时传入
-PING0_API_KEY=xxxx ./cfst-region.sh
+ABUSEIPDB_KEY=xxxx ./cfst-region.sh
 ```
 
 启用后输出示例（行尾追加纯净度标注）：
 
 ```
 # SIN（新加坡）:
-104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控26% 原生IP
-162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控48% 机房IP
+104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控0% 机房IP 广播IP
+162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控25% 机房IP 广播IP
   （风控>60% 已过滤 1 个: 104.18.40.98[风控75%]）
 ```
 
-> 未配置 Key 时跳过检测，输出保持原样。免费接口 `ping0.cc/geo` 仅返回位置/ASN/组织，纯净度字段需付费 API Key。
+> 未配置 AbuseIPDB Key 时仍标注 机房/广播（proxycheck + ipinfo 免费接口），仅缺少风控值。
+> 说明：Cloudflare anycast IP 均为机房属性（广播 IP），纯净度主要看风控值。
 
 ### `cfst-hosts.sh` — 一键更新 hosts 加速 GitHub
 
