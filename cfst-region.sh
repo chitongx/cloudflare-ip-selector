@@ -116,11 +116,12 @@ def ping0_check(ip):
         return None
 
 def fmt_purity(p):
-    """格式化纯净度标注: 风控26% 原生IP / 风控26% 机房IP"""
+    """格式化纯净度标注（两个维度分开）: 风控26% 机房IP 广播IP"""
     if not p or p["risk"] is None:
         return ""
-    tag = "原生IP" if p["native"] else ("机房IP" if p["idc"] else "广播IP")
-    return f" 风控{p['risk']}% {tag}"
+    iptype = "机房IP" if p["idc"] else "非机房IP"
+    native = "原生IP" if p["native"] else "广播IP"
+    return f" 风控{p['risk']}% {iptype} {native}"
 
 # 每个地区取 TopN，并并发补测下载速度 + 纯净度
 picks = {}   # colo -> [(lat, ip, mbps, purity), ...]
