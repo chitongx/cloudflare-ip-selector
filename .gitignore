@@ -1,0 +1,11 @@
+# 运行产物（不入库）
+result*.csv
+result*.txt
+nowip_hosts.txt
+cfst_pkg
+*.zip
+*.tar.gz
+# 二进制（通过 install.sh 下载）
+/cfst
+# 系统文件
+.DS_Store
