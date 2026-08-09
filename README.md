@@ -75,30 +75,35 @@ cd cloudflare-ip-selector
 
 ### 🛡️ IP 纯净度检测（免费，零成本）
 
-脚本对每个候选 IP 自动检测纯净度并标注：**机房/非机房**（proxycheck.io）+ **原生/广播 IP**（ipinfo.io anycast），可选启用**风控值评分**（AbuseIPDB）。
+脚本对每个候选 IP 自动检测纯净度并标注：**机房/非机房**（proxycheck.io + ipdata）+ **原生/广播 IP**（ipinfo.io anycast）+ **风控值**（ipdata 综合威胁评分，最接近 ping0 语义；AbuseIPDB 举报分作为补充）。
 
-**启用风控值（可选）**：去 [AbuseIPDB](https://www.abuseipdb.com/register) 免费注册 API Key（每天 1000 次查询，本项目每天仅查 40 个 IP），填入脚本顶部或环境变量：
+**启用方式**：免费注册两个 key（各 1 分钟，本项目每天仅查 40 个 IP，远低于免费额度）：
+
+| Key | 注册地址 | 提供数据 |
+|---|---|---|
+| `IPDATA_KEY` | [ipdata.co/signup](https://ipdata.co/signup)（1500次/天） | **风控值**（threat_score 0-100 综合威胁评分）+ 机房判断 |
+| `ABUSEIPDB_KEY` | [abuseipdb.com/register](https://www.abuseipdb.com/register)（1000次/天） | 举报分（AbuseIPDB 有举报记录时的补充信号） |
 
 ```bash
-# 脚本配置区（cfst-region.sh 顶部）
-ABUSEIPDB_KEY=""     # 填入免费注册的 key，才有风控值
+# 脚本配置区（cfst-region.sh 顶部）或环境变量
+IPDATA_KEY=""        # 填入 ipdata key，才有综合风控值
+ABUSEIPDB_KEY=""     # 填入 AbuseIPDB key（可选，补充举报分）
 RISK_MAX=60          # 风控值上限(%)，超过自动过滤；设 100 则不过滤
 
 # 或运行时传入
-ABUSEIPDB_KEY=xxxx ./cfst-region.sh
+IPDATA_KEY=xxxx ABUSEIPDB_KEY=xxxx ./cfst-region.sh
 ```
 
 启用后输出示例（行尾追加纯净度标注）：
 
 ```
 # SIN（新加坡）:
-104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控0% 机房IP 广播IP
-162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控25% 机房IP 广播IP
+104.18.36.149:443#SIN 电信优选[78ms 12.34Mbps] 风控26% 机房IP 广播IP
+162.159.34.63:443#SIN 电信优选[78ms 4.92Mbps] 风控38% 机房IP 广播IP
   （风控>60% 已过滤 1 个: 104.18.40.98[风控75%]）
 ```
 
-> 未配置 AbuseIPDB Key 时仍标注 机房/广播（proxycheck + ipinfo 免费接口），仅缺少风控值。
-> 说明：Cloudflare anycast IP 均为机房属性（广播 IP），纯净度主要看风控值。
+> 未配置 key 时仍标注 机房/广播（proxycheck + ipinfo 免费接口，零注册）。Cloudflare anycast IP 均为机房/广播属性，纯净度主要看风控值。
 
 ### `cfst-hosts.sh` — 一键更新 hosts 加速 GitHub
 

@@ -37,10 +37,12 @@ PORT=443
 OUT_DIR="${HOME}/Desktop/Cloudflare优选IP"
 
 # ===== IP 纯净度检测（免费方案）=====
-#  proxycheck.io（机房判断）+ ipinfo.io（anycast=广播IP）+ AbuseIPDB（风控分）
-#  AbuseIPDB 免费注册 key: https://www.abuseipdb.com/register（每天1000次）
-#  填了 ABUSEIPDB_KEY 才有「风控值」，不填则只标注 机房/广播
+#  proxycheck.io（机房判断）+ ipinfo.io（anycast=广播IP）+ AbuseIPDB（举报分）
+#  + ipdata.co（综合威胁评分 threat_score 0-100，最接近 ping0 风控值）
+#  免费注册: AbuseIPDB https://www.abuseipdb.com/register | ipdata https://ipdata.co/signup
+#  填了 key 才有对应评分；不填则只标注 机房/广播
 ABUSEIPDB_KEY="${ABUSEIPDB_KEY:-}"
+IPDATA_KEY="${IPDATA_KEY:-}"
 RISK_MAX=60    # 风控值上限(%)，超过的 IP 视为不纯净自动过滤；设为 100 则不过滤
 # ================================
 
@@ -54,7 +56,7 @@ fi
 
 echo "==> [2/4] 解析结果并为 Top IP 补测下载速度 + 纯净度..."
 COLOS="$COLOS" TOP_N="$TOP_N" LABEL="$LABEL" PORT="$PORT" OUT_DIR="$OUT_DIR" \
-ABUSEIPDB_KEY="$ABUSEIPDB_KEY" RISK_MAX="$RISK_MAX" \
+ABUSEIPDB_KEY="$ABUSEIPDB_KEY" IPDATA_KEY="$IPDATA_KEY" RISK_MAX="$RISK_MAX" \
 env -u PYTHONPATH python3 << 'PYEOF'
 import csv, os, collections, datetime, subprocess, json
 from concurrent.futures import ThreadPoolExecutor
@@ -65,6 +67,7 @@ label = os.environ["LABEL"]
 port = os.environ["PORT"]
 out_dir = os.environ["OUT_DIR"]
 abuse_key = os.environ.get("ABUSEIPDB_KEY", "")
+ipdata_key = os.environ.get("IPDATA_KEY", "")
 risk_max = int(os.environ.get("RISK_MAX", "60"))
 DL_URL = "https://speed.cloudflare.com/__down?bytes=2000000"
 
@@ -105,8 +108,9 @@ def dl_mbps(ip):
         return 0.0
 
 def free_check(ip):
-    """免费方案: proxycheck(机房类型) + ipinfo(anycast=广播) + AbuseIPDB(风控分)"""
-    res = {"risk": None, "idc": None, "native": None, "source": "free"}
+    """免费方案: proxycheck(机房) + ipinfo(anycast=广播) + AbuseIPDB(举报分) + ipdata(威胁评分)"""
+    res = {"risk": None, "risk_source": None, "abuse": None,
+           "idc": None, "native": None, "source": "free"}
     # 1. proxycheck.io — 机房/ISP 类型判断（免费 1000次/天，key=free）
     try:
         d = curl_json(f"https://proxycheck.io/v2/{ip}?key=free&vpn=1", timeout=10)
@@ -129,7 +133,23 @@ def free_check(ip):
                           headers={"Key": abuse_key, "Accept": "application/json"}, timeout=12)
             data = d.get("data", {}) if isinstance(d, dict) else {}
             if "abuseConfidenceScore" in data:
-                res["risk"] = int(data["abuseConfidenceScore"])
+                res["abuse"] = int(data["abuseConfidenceScore"])
+                res["risk"] = res["abuse"]
+                res["risk_source"] = "abuse"
+        except Exception:
+            pass
+    # 4. ipdata.co — 综合威胁评分 threat_score(0-100)，最接近 ping0 风控值
+    if ipdata_key:
+        try:
+            d = curl_json(f"https://api.ipdata.co/{ip}/threat?api-key={ipdata_key}", timeout=10)
+            if isinstance(d, dict) and "threat_score" in d:
+                ts = int(d["threat_score"])
+                res["risk"] = ts          # ipdata 优先作为风控值
+                res["risk_source"] = "ipdata"
+                if "is_datacenter" in d:
+                    res["idc"] = bool(d["is_datacenter"])
+                if "is_abuser" in d:
+                    res["abuser"] = bool(d["is_abuser"])
         except Exception:
             pass
     return res
@@ -144,6 +164,8 @@ def fmt_purity(p):
     parts = []
     if p.get("risk") is not None:
         parts.append(f"风控{p['risk']}%")
+    if p.get("abuse") is not None and p.get("abuse", 0) > 0 and p.get("risk_source") == "ipdata":
+        parts.append(f"举报{p['abuse']}%")
     if p.get("idc") is True:
         parts.append("机房IP")
     elif p.get("idc") is False:
@@ -172,7 +194,9 @@ for colo in picks:
 
 date_str = datetime.date.today().strftime("%Y-%m-%d")
 lines = [f"Cloudflare 优选 IP（{date_str}）", "=" * 60]
-mode = "免费(AbuseIPDB+proxycheck+ipinfo)" if abuse_key else "免费(proxycheck+ipinfo，未配AbuseIPDB无风控分)"
+mode = ("免费(ipdata威胁分+AbuseIPDB+proxycheck+ipinfo)" if ipdata_key
+        else ("免费(AbuseIPDB举报分+proxycheck+ipinfo)" if abuse_key
+              else "免费(proxycheck+ipinfo，未配key无风控分)"))
 
 for colo in requested:
     name = REGION_NAMES.get(colo, colo)
